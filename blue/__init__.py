@@ -45,7 +45,7 @@ class NoMypycBlackFileFinder(machinery.FileFinder):
 
     def find_spec(self, fullname, *args, **kw):
         if fullname == 'black' or fullname.startswith('black.'):
-            return super(NoMypycBlackFileFinder, self).find_spec(
+            return super().find_spec(
                 fullname, *args, **kw
             )
         else:
@@ -53,7 +53,7 @@ class NoMypycBlackFileFinder(machinery.FileFinder):
 
     @classmethod
     def path_hook(cls):
-        return super(NoMypycBlackFileFinder, cls).path_hook(
+        return super().path_hook(
             (machinery.SourceFileLoader, machinery.SOURCE_SUFFIXES),
             (machinery.SourcelessFileLoader, machinery.BYTECODE_SUFFIXES),
         )

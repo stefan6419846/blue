@@ -20,7 +20,7 @@ if this and that:
     y = "hello " "world"  # Hanging comment
 
 
-class Foo(object):
+class Foo:
     def f(self):
         return 37 * -2
 
