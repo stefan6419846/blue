@@ -45,9 +45,7 @@ class NoMypycBlackFileFinder(machinery.FileFinder):
 
     def find_spec(self, fullname, *args, **kw):
         if fullname == 'black' or fullname.startswith('black.'):
-            return super().find_spec(
-                fullname, *args, **kw
-            )
+            return super().find_spec(fullname, *args, **kw)
         else:
             return self.original_finder.find_spec(fullname, *args, **kw)
 
