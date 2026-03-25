@@ -339,7 +339,7 @@ def fix_docstring(docstring: str, prefix: str) -> str:
 
 class LineGenerator(BlackLineGenerator):
 
-    def visit_STRING(self, leaf: Leaf) -> Iterator[Line]:
+    def visit_STRING(self, leaf: Leaf) -> Iterator[Line]:  # noqa: N802
         normalize_unicode_escape_sequences(leaf)
 
         if is_docstring(leaf) and not re.search(r"\\\s*\n", leaf.value):
