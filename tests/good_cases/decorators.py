@@ -12,5 +12,4 @@ def get_dec_dec():
 
 
 @get_dec_dec()()
-def foo():
-    ...
+def foo(): ...

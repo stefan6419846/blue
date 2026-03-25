@@ -1,5 +1,6 @@
 # Copied from https://raw.githubusercontent.com/psf/black/20.8b1/tests/data/string_quotes.py
-''''''
+""""""
+
 '\''
 '"'
 "'"

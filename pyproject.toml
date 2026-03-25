@@ -1,0 +1,78 @@
+[build-system]
+requires = [
+    "setuptools>=70.1",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blue"
+description = "Blue -- Some folks like black but I prefer blue."
+version = "26.3.1"
+license = "Apache-2.0"
+readme = {file = "README.rst", content-type = "text/x-rst"}
+authors = [
+    {name = "Grant Jenks", email = "contact@grantjenks.com"},
+]
+maintainers = [
+    {name = "stefan6419846"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
+requires-python = ">=3.10, <4"
+dependencies = [
+    "black==26.3.1",
+]
+
+[project.scripts]
+blue = "blue:main"
+
+[project.urls]
+Homepage = "https://blue.readthedocs.io/"
+Documentation = "https://blue.readthedocs.io/en/latest"
+Repository = "https://github.com/stefan6419846/blue"
+Issues = "https://github.com/stefan6419846/blue/issues"
+
+[project.optional-dependencies]
+dev = [
+    "doc8",
+    "flake8",
+    "flake8-bugbear",
+    "pep8-naming",
+    "pytest",
+    "pytest-cov",
+    "rstcheck",
+    "sphinx",
+    "tox",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "blue",
+    "blue.*"
+]
+namespaces = false
+
+[tool.coverage.run]
+branch = true
+parallel = true
+source = [
+    "blue",
+]
+patch = [
+    "subprocess",
+]
+
+[tool.coverage.report]
+# Coverage is broken at the moment.
+# show_missing = true

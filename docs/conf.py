@@ -15,8 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath('..'))
 
-import blue
-
+from importlib.metadata import version as _get_version
 
 # -- Project information -----------------------------------------------------
 
@@ -25,7 +24,7 @@ copyright = '2020, Grant Jenks, Barry Warsaw'
 author = 'Grant Jenks, Barry Warsaw'
 
 # The full version, including alpha/beta/rc tags
-release = blue.__version__
+release = _get_version('blue')
 
 
 # -- General configuration ---------------------------------------------------

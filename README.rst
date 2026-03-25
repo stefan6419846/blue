@@ -28,6 +28,11 @@ if ``blue`` eventually were retired.  Until then, we'll maintain our small set
 of hacks on top of ``black`` and carefully consider what other deviations are
 needed to assuage our sensitive, but experienced, eye.
 
+About this fork
+===============
+
+Upstream development seems to have stalled. This fork tries to keep up-to-date
+with the latest ``black`` changes and external dependencies.
 
 How do I use blue?
 ==================
@@ -37,8 +42,6 @@ you would ``black`` -- just replace the ``black`` command with ``blue``, sit
 back, and enjoy even betterly formatted Python code!  You can refer to
 `black's <https://black.readthedocs.io/en/stable/>`_ documentation for
 anything not listed here.
-
-Try it out now using `iblueit.dev <https://iblueit.dev/>`_.
 
 So what's different?
 ====================
@@ -101,22 +104,3 @@ Contributors
 ``blue`` is licensed under the terms of the Apache License Version 2.0.
 ``black`` is `licensed <https://github.com/psf/black#license>`_ under the
 terms of the MIT license.
-
-
-Project details
-===============
-
-.. image:: https://img.shields.io/badge/code%20style-blue-blue.svg
-   :target: https://blue.readthedocs.io/
-
-.. image:: https://github.com/grantjenks/blue/workflows/integration/badge.svg
-   :target: https://github.com/grantjenks/blue/actions?query=workflow%3Aintegration
-
-.. image:: https://github.com/grantjenks/blue/workflows/release/badge.svg
-   :target: https://github.com/grantjenks/blue/actions?query=workflow%3Arelease
-
-* Project home: https://github.com/grantjenks/blue
-* Report bugs and suggestions at: https://github.com/grantjenks/blue/issues
-* Code hosting: https://github.com/grantjenks/blue.git
-* Documentation: https://blue.readthedocs.io/en/latest
-* Try it out: https://iblueit.dev

@@ -7,10 +7,9 @@ import logging
 import re
 import sys
 
+from configparser import ConfigParser
 from importlib import machinery
-
-__version__ = '0.9.1'
-
+from importlib.metadata import version as _get_version
 
 # Black 1.0+ ships pre-compiled libraries with mypyc, which we can't
 # monkeypatch like needed. In order to ensure that the original .py files get
@@ -19,7 +18,9 @@ __version__ = '0.9.1'
 # However, we should perform this run time check to ensure we're not running
 # in an environment we can't support.
 
-if 'black' in sys.modules and sys.modules['black'].__file__.endswith('.so'):
+if 'black' in sys.modules and sys.modules['black'].__file__.endswith(
+    '.so'
+):  # pragma: no cover
     raise RuntimeError(
         'A mypyc-compiled version of black has already been imported. '
         'This prevents blue from operating properly.'
@@ -38,7 +39,9 @@ class NoMypycBlackFileFinder(machinery.FileFinder):
             else:
                 break
         else:
-            raise ImportError('Failed to find original import finder')
+            raise ImportError(
+                'Failed to find original import finder'
+            )  # pragma: no cover
 
     def find_spec(self, fullname, *args, **kw):
         if fullname == 'black' or fullname.startswith('black.'):
@@ -69,41 +72,46 @@ import black.strings
 
 from black import Leaf, Path, click, token
 from black.cache import user_cache_dir
-from black.comments import ProtoComment, make_comment
-from black.files import tomli
+from black.comments import (
+    LN,
+    ProtoComment,
+    make_comment,
+    normalize_trailing_prefix,
+)
+from black.files import find_user_pyproject_toml, tomllib
 from black.linegen import LineGenerator as BlackLineGenerator
 from black.lines import Line
 from black.nodes import (
     STANDALONE_COMMENT,
+    is_docstring,
     is_multiline_string,
-    prev_siblings_are,
-    syms,
+    make_simple_prefix,
 )
 from black.strings import (
     STRING_PREFIX_CHARS,
     get_string_prefix,
     normalize_string_prefix,
+    normalize_unicode_escape_sequences,
     sub_twice,
 )
-
-from flake8.options import config as flake8_config
-from flake8.options import manager as flake8_manager
 
 from enum import Enum
 from functools import lru_cache
 from typing import Any, Dict, Iterator, List, Optional, Pattern
 
+from click import Option
 from click.decorators import version_option
-
 
 LOG = logging.getLogger(__name__)
 
 black_format_file_in_place = black.format_file_in_place
-black_strings_fix_docstring = black.strings.fix_docstring
+black_strings_fix_docstring = black.strings.fix_multiline_docstring
 black_strings_normalize_string_quotes = black.strings.normalize_string_quotes
 
+version = _get_version('blue')
+
 # Try not to poison Black's cache directory.
-black.cache.CACHE_DIR = Path(user_cache_dir('blue', version=__version__))
+black.cache.CACHE_DIR = Path(user_cache_dir('blue', version=version))
 
 
 # Blue works by monkey patching black, so we don't have to duplicate
@@ -144,6 +152,8 @@ BLUE_MONKEYPATCHES = [
     (black.trans, 'normalize_string_quotes', Mode.asynchronous),
     (black.comments, 'list_comments', Mode.asynchronous),
     (black.linegen, 'list_comments', Mode.asynchronous),
+    (black.comments, 'generate_comments', Mode.asynchronous),
+    (black.linegen, 'generate_comments', Mode.asynchronous),
 ]
 
 
@@ -160,24 +170,6 @@ def monkey_patch_black(mode: Mode) -> None:
 # off formatting for anything that comes from black.
 
 # fmt: off
-def is_docstring(leaf: Leaf) -> bool:
-    if prev_siblings_are(
-        leaf.parent, [None, token.NEWLINE, token.INDENT, syms.simple_stmt]
-    ):
-        return True
-
-    # Multiline docstring on the same line as the `def`.
-    if prev_siblings_are(leaf.parent, [syms.parameters, token.COLON, syms.simple_stmt]):
-        # `syms.parameters` is only used in funcdefs and async_funcdefs in the Python
-        # grammar. We're safe to return True without further checks.
-        return True
-
-    if leaf.parent.prev_sibling is None and leaf.column == 0:
-        # Identify module docstrings.
-        return True
-
-    return False
-
 
 # Re(gex) does actually cache patterns internally but this still improves
 # performance on a long list literal of strings by 5-9% since lru_cache's
@@ -261,13 +253,24 @@ def normalize_string_quotes(s: str) -> str:
     return f'{prefix}{new_quote}{new_body}{new_quote}'
 
 
+def generate_comments(leaf: LN, *, mode: Mode) -> Iterator[Leaf]:
+    total_consumed = 0
+    for pc in list_comments(
+        leaf.prefix, is_endmarker=leaf.type == token.ENDMARKER, mode=mode
+    ):
+        total_consumed = pc.consumed
+        prefix = make_simple_prefix(pc.newlines, pc.form_feed) + pc.leading_whitespace
+        yield Leaf(pc.type, pc.value, prefix=prefix)
+    normalize_trailing_prefix(leaf, total_consumed)
+
+
 # Like black's list_comments() but preserves whitespace leading up to the hash
 # mark.  Because what we really need to do is restore the whitespace after the
 # line.lstrip() statement, there really is no good way to more narrowly
 # monkeypatch.  This would be a good hook to install.  See
 # https://github.com/grantjenks/blue/issues/14
 @lru_cache(maxsize=4096)
-def list_comments(prefix: str, *, is_endmarker: bool) -> List[ProtoComment]:
+def list_comments(prefix: str, *, is_endmarker: bool, mode: Mode) -> List[ProtoComment]:
     """Return a list of :class:`ProtoComment` objects parsed from the given `prefix`."""
     result: List[ProtoComment] = []
     if not prefix or "#" not in prefix:
@@ -276,16 +279,21 @@ def list_comments(prefix: str, *, is_endmarker: bool) -> List[ProtoComment]:
     consumed = 0
     nlines = 0
     ignored_lines = 0
-    for index, orig_line in enumerate(prefix.split("\n")):
-        consumed += len(orig_line) + 1  # adding the length of the split '\n'
-        line = orig_line.lstrip()
+    form_feed = False
+    for index, full_line in enumerate(re.split('\r?\n|\r', prefix)):
+        consumed += len(full_line) + 1  # adding the length of the split '\n'
+        match = re.match(r'^(\s*)(\S.*|)$', full_line)
+        assert match
+        whitespace, line = match.groups()
         if not line:
             nlines += 1
-        if not line.startswith("#"):
+            if '\f' in full_line:
+                form_feed = True
+        if not line.startswith('#'):
             # Escaped newlines outside of a comment are not really newlines at
             # all. We treat a single-line comment following an escaped newline
             # as a simple trailing comment.
-            if line.endswith("\\"):
+            if line.endswith('\\'):
                 ignored_lines += 1
             continue
 
@@ -293,28 +301,21 @@ def list_comments(prefix: str, *, is_endmarker: bool) -> List[ProtoComment]:
             comment_type = token.COMMENT  # simple trailing comment
         else:
             comment_type = STANDALONE_COMMENT
-        # Restore the original whitespace, but only for hanging comments.  We
-        # use a heuristic to figure out hanging comments since that information
-        # isn't explicitly passed in here (no, `is_endmarker` doesn't tell us,
-        # apparently).  Hanging comments seem to not have a newline in prefix.
-        #
-        # Note however that the whitespace() function in black will add back
-        # two leading spaces (see DOUBLESPACE).  Rather than monkey patch the
-        # entire function, let's just remove up to two spaces before the hash
-        # character.
-        if '\n' not in prefix:
-            whitespace = orig_line[:-len(line)]
-            if len(whitespace) >= 2:
-                whitespace = whitespace[2:]
-            comment = whitespace + make_comment(line)
-        else:
-            comment = make_comment(line)
+        comment = make_comment(line, mode=mode)
+        # Track the original whitespace for a line, adjusting down for the two
+        # spaces black prepends
+        whitespace = max(0, len(full_line) - len(line) - 2)
         result.append(
             ProtoComment(
-                type=comment_type, value=comment, newlines=nlines,
-                consumed=consumed
+                type=comment_type,
+                value=comment,
+                newlines=nlines,
+                consumed=consumed,
+                form_feed=form_feed,
+                leading_whitespace=' ' * whitespace,
             )
         )
+        form_feed = False
         nlines = 0
     return result
 
@@ -322,10 +323,10 @@ def list_comments(prefix: str, *, is_endmarker: bool) -> List[ProtoComment]:
 def parse_pyproject_toml(path_config: str) -> Dict[str, Any]:
     """Parse a pyproject toml file, pulling out relevant parts for Black
 
-    If parsing fails, will raise a tomli.TOMLDecodeError
+    If parsing fails, will raise a tomllib.TOMLDecodeError
     """
     with open(path_config, "rb") as f:
-        pyproject_toml = tomli.load(f)
+        pyproject_toml = tomllib.load(f)
     config = pyproject_toml.get("tool", {}).get("blue", {})
     return {k.replace("--", "").replace("-", "_"): v for k, v in config.items()}
 
@@ -341,10 +342,21 @@ def fix_docstring(docstring: str, prefix: str) -> str:
 class LineGenerator(BlackLineGenerator):
 
     def visit_STRING(self, leaf: Leaf) -> Iterator[Line]:
-        if is_docstring(leaf) and "\\\n" not in leaf.value:
+        normalize_unicode_escape_sequences(leaf)
+
+        if is_docstring(leaf) and not re.search(r"\\\s*\n", leaf.value):
             # We're ignoring docstrings with backslash newline escapes because changing
             # indentation of those changes the AST representation of the code.
-            docstring = normalize_string_prefix(leaf.value)
+            if self.mode.string_normalization:
+                docstring = normalize_string_prefix(leaf.value)
+                # We handle string normalization at the end of this method, but since
+                # what we do right now acts differently depending on quote style (ex.
+                # see padding logic below), there's a possibility for unstable
+                # formatting. To avoid a situation where this function formats a
+                # docstring differently on the second pass, normalize it early.
+                docstring = normalize_string_quotes(docstring)
+            else:
+                docstring = leaf.value
             prefix = get_string_prefix(docstring)
             docstring = docstring[len(prefix) :]  # Remove the prefix
             quote_char = docstring[0]
@@ -356,13 +368,14 @@ class LineGenerator(BlackLineGenerator):
             quote_len = 1 if docstring[1] != quote_char else 3
             docstring = docstring[quote_len:-quote_len]
             docstring_started_empty = not docstring
+            indent = " " * 4 * self.current_line.depth
 
             if is_multiline_string(leaf):
-                indent = " " * 4 * self.current_line.depth
-                docstring = fix_docstring(docstring, indent)
+                docstring = black_strings_fix_docstring(docstring, indent)
             else:
                 docstring = docstring.strip()
 
+            has_trailing_backslash = False
             if docstring:
                 # Add some padding if the docstring starts / ends with a quote mark.
                 if docstring[0] == quote_char:
@@ -375,13 +388,45 @@ class LineGenerator(BlackLineGenerator):
                         # Odd number of tailing backslashes, add some padding to
                         # avoid escaping the closing string quote.
                         docstring += " "
+                        has_trailing_backslash = True
             elif not docstring_started_empty:
                 docstring = " "
 
-            # Enforce triple double quotes at this point.
+            # Enforce triple quotes at this point.
             quote = '"""'
-            leaf.value = prefix + quote + docstring + quote
 
+            # It's invalid to put closing single-character quotes on a new line.
+            if quote_len == 3:
+                # We need to find the length of the last line of the docstring
+                # to find if we can add the closing quotes to the line without
+                # exceeding the maximum line length.
+                # If docstring is one line, we don't put the closing quotes on a
+                # separate line because it looks ugly (#3320).
+                lines = docstring.splitlines()
+                last_line_length = len(lines[-1]) if docstring else 0
+
+                # If adding closing quotes would cause the last line to exceed
+                # the maximum line length, and the closing quote is not
+                # prefixed by a newline then put a line break before
+                # the closing quotes
+                if (
+                    len(lines) > 1
+                    and last_line_length + quote_len > self.mode.line_length
+                    and len(indent) + quote_len <= self.mode.line_length
+                    and not has_trailing_backslash
+                ):
+                    if leaf.value[-1 - quote_len] == "\n":
+                        leaf.value = prefix + quote + docstring + quote
+                    else:
+                        leaf.value = prefix + quote + docstring + "\n" + indent + quote
+                else:
+                    leaf.value = prefix + quote + docstring + quote
+            else:
+                leaf.value = prefix + quote + docstring + quote
+
+        if self.mode.string_normalization and leaf.type == token.STRING:
+            leaf.value = normalize_string_prefix(leaf.value)
+            leaf.value = normalize_string_quotes(leaf.value)
         yield from self.visit_default(leaf)
 # fmt: on
 
@@ -393,21 +438,48 @@ def format_file_in_place(*args, **kws):
     return black_format_file_in_place(*args, **kws)
 
 
-try:
-    BaseConfigParser = flake8_config.ConfigParser              # flake8 v4
-except AttributeError:
-    BaseConfigParser = flake8_config.MergedConfigParser        # flake8 v3
+def load_configs_from_file() -> Dict[str, Any]:
+    """Parses supported config files using configparser"""
+    supported_config_files = ('setup.cfg', 'tox.ini', '.blue')
+    config_dict = {}
+    pwd = Path.cwd()
+    cfg = ConfigParser()
 
+    config_file_found = False
 
-class MergedConfigParser(BaseConfigParser):
-    def _parse_config(self, config_parser, parent=None):
-        """Skip option parsing in flake8's config parsing."""
-        config_dict = {}
-        for option_name in config_parser.options(self.program_name):
-            value = config_parser.get(self.program_name, option_name)
-            LOG.debug('Option "%s" has value: %r', option_name, value)
-            config_dict[option_name] = value
-        return config_dict
+    # search config files from pwd and its parents
+    for directory in (pwd, *pwd.parents):
+        filenames = [
+            (directory / config_file) for config_file in supported_config_files
+        ]
+        files_read = cfg.read(filenames)
+
+        # if config file was read, stop search
+        if len(files_read) > 0:
+            config_file_found = True
+            break
+
+    if not config_file_found:
+        # config file not found yet
+        # last try using top-level user configuration for black
+        try:
+            top_level_full_path = find_user_pyproject_toml()
+
+            top_level_dir = top_level_full_path.parent
+
+            filenames = [
+                (top_level_dir / config_file)
+                for config_file in supported_config_files
+            ]
+
+            cfg.read(filenames)
+        except PermissionError:
+            # ignore user level config directory if no access permission was given
+            pass
+
+    if cfg.has_section('blue'):
+        config_dict.update(cfg.items('blue'))
+    return config_dict
 
 
 def read_configs(
@@ -416,12 +488,9 @@ def read_configs(
     """Read configs through the config param's callback hook."""
     # Use black's `read_pyproject_toml` for the default
     result = black.read_pyproject_toml(ctx, param, value)
-    # Use flake8's config file parsing to load setup.cfg, tox.ini, and .blue
+    # parses setup.cfg, tox.ini, and .blue config files
     # The parsing looks both in the project and user directories.
-    finder = flake8_config.ConfigFileFinder('blue')
-    manager = flake8_manager.OptionManager('blue', '0')
-    parser = MergedConfigParser(manager, finder)
-    config = parser.parse()
+    config = load_configs_from_file()
     # Merge the configs into Click's `default_map`.
     default_map: Dict[str, Any] = {}
     default_map.update(ctx.default_map or {})
@@ -432,28 +501,35 @@ def read_configs(
     return result
 
 
+def _find_parameter(name: str):
+    for parameter in black.main.params:
+        if parameter.name == name:
+            return parameter
+    raise ValueError(f'Parameter name {name!r} not found!')
+
+
 def main():
     monkey_patch_black(Mode.synchronous)
     # Reach in and monkey patch the Click options. This is tricky based on the
     # way Click works! This is highly fragile because the index into the Click
     # parameters is dependent on the decorator order for Black's main().
     # Change the default line length to 79 characters.
-    line_length_param = black.main.params[1]
-    assert line_length_param.name == 'line_length'
+    line_length_param = _find_parameter('line_length')
     line_length_param.default = 79
     # Change the target version help doc to mention "Blue", not "Black".
-    target_version_param = black.main.params[2]
-    assert target_version_param.name == 'target_version'
+    target_version_param = _find_parameter('target_version')
     target_version_param.help = target_version_param.help.replace(
         'Black', 'Blue'
     )
     # Change the config param callback to support setup.cfg, tox.ini, etc.
-    config_param = black.main.params[25]
-    assert config_param.name == 'config'
+    config_param = _find_parameter('config')
     config_param.callback = read_configs
-    # Change the version string by adding a redundant Click `version_option`
-    # decorator on `black.main`. Fortunately the added `version_option` takes
-    # precedence over the existing one.
-    version_string = f'{__version__}, based on black {black.__version__}'
+    # Change the version string.
+    black.main.params = [
+        p
+        for p in black.main.params
+        if not (isinstance(p, Option) and '--version' in p.opts)
+    ]
+    version_string = f'{version}, based on black {black.__version__}'
     version_option(version_string)(black.main)
     black.main()
