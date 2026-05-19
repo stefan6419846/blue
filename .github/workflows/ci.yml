@@ -32,7 +32,7 @@ jobs:
           pip install tox
       - name: Run checks with tox
         run: |
-          tox -e ${matrix.check}
+          tox -e ${CHECK}
         env:
           CHECK: ${{ matrix.check }}
 
