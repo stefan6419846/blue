@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "blue"
 description = "Blue -- Some folks like black but I prefer blue."
-version = "26.3.1"
+version = "26.5.0"
 license = "Apache-2.0"
 readme = {file = "README.rst", content-type = "text/x-rst"}
 authors = [
@@ -27,7 +27,7 @@ classifiers = [
 ]
 requires-python = ">=3.10, <4"
 dependencies = [
-    "black==26.3.1",
+    "black==26.5.0",
 ]
 
 [project.scripts]
