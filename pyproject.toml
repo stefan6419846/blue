@@ -27,7 +27,7 @@ classifiers = [
 ]
 requires-python = ">=3.10, <4"
 dependencies = [
-    "black==26.5.0",
+    "black==26.5.1",
 ]
 
 [project.scripts]
