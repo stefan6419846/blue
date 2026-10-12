@@ -251,14 +251,33 @@ def normalize_string_quotes(s: str) -> str:
     return f'{prefix}{new_quote}{new_body}{new_quote}'
 
 
-def generate_comments(leaf: LN, *, mode: Mode) -> Iterator[Leaf]:
+def generate_comments(
+    leaf: LN,
+    mode: Mode,
+    *,
+    preserve_comment_formatting: bool = False,
+    line_ranges_first_lineno: int = 0,
+    line_ranges_selected: set[int] | None = None,
+) -> Iterator[Leaf]:
     total_consumed = 0
-    for pc in list_comments(
+    comments = list_comments(
         leaf.prefix, is_endmarker=leaf.type == token.ENDMARKER, mode=mode
-    ):
+    )
+    prefix_line_count = len(re.split(r"\r?\n|\r", leaf.prefix)) - 1
+
+    for pc in comments:
         total_consumed = pc.consumed
         prefix = make_simple_prefix(pc.newlines, pc.form_feed) + pc.leading_whitespace
-        yield Leaf(pc.type, pc.value, prefix=prefix)
+        value = pc.value
+        comment_lineno = (
+            line_ranges_first_lineno - prefix_line_count + pc.prefix_line_index
+        )
+        should_preserve = preserve_comment_formatting and (
+            line_ranges_selected is None or comment_lineno not in line_ranges_selected
+        )
+        if should_preserve:
+            value = pc.leading_whitespace + pc.original_value
+        yield Leaf(pc.type, value, prefix=prefix)
     normalize_trailing_prefix(leaf, total_consumed)
 
 
@@ -311,6 +330,8 @@ def list_comments(prefix: str, *, is_endmarker: bool, mode: Mode) -> List[ProtoC
                 consumed=consumed,
                 form_feed=form_feed,
                 leading_whitespace=' ' * whitespace,
+                original_value=line,
+                prefix_line_index=index,
             )
         )
         form_feed = False
@@ -346,7 +367,7 @@ class LineGenerator(BlackLineGenerator):
             # We're ignoring docstrings with backslash newline escapes because changing
             # indentation of those changes the AST representation of the code.
             if self.mode.string_normalization:
-                docstring = normalize_string_prefix(leaf.value)
+                docstring = normalize_string_prefix(leaf.value, self.mode)
                 # We handle string normalization at the end of this method, but since
                 # what we do right now acts differently depending on quote style (ex.
                 # see padding logic below), there's a possibility for unstable
@@ -423,7 +444,7 @@ class LineGenerator(BlackLineGenerator):
                 leaf.value = prefix + quote + docstring + quote
 
         if self.mode.string_normalization and leaf.type == token.STRING:
-            leaf.value = normalize_string_prefix(leaf.value)
+            leaf.value = normalize_string_prefix(leaf.value, self.mode)
             leaf.value = normalize_string_quotes(leaf.value)
         yield from self.visit_default(leaf)
 # fmt: on
